@@ -6,7 +6,10 @@ import (
   "encoding/json"
   "io/ioutil"
   "os"
+  "github.com/dvelopment/go-bekant"
   "github.com/dvelopment/go-pi-distance"
+  "github.com/gorilla/mux"
+  "strconv"
 )
 
 var settings ConfigType
@@ -32,8 +35,20 @@ type DeskConfigType struct {
   DownPin int
 }
 
+type PositionResultType struct {
+  Position float64
+}
+
+type MoveResultType struct {
+  Direction string
+}
+
 type DistanceResultType struct {
   Distance float64
+}
+
+type StatusResultType struct {
+  IsPrimed bool
 }
 
 func readConfig(fileName string) (ConfigType) {
@@ -50,12 +65,121 @@ func readConfig(fileName string) (ConfigType) {
   return c
 }
 
+func moveHandler(w http.ResponseWriter, r *http.Request) {
+  params := mux.Vars(r)
+  dir := params["direction"]
+
+  var direction desk.Direction
+
+  if (dir == "up") {
+    direction = desk.Up
+  } else {
+    direction = desk.Down
+  }
+
+  desk.Move(direction)
+
+  result := MoveResultType{Direction: dir}
+
+  js, err := json.Marshal(result)
+
+  if (err != nil) {
+    http.Error(w, err.Error(), http.StatusInternalServerError)
+  } else {
+    w.Header().Set("Content-Type", "application/json")
+    w.Write(js)
+  }
+}
+
+func goHandler(w http.ResponseWriter, r *http.Request) {
+  params := mux.Vars(r)
+
+  pos, err := strconv.ParseFloat(params["position"], 64)
+
+  if (err != nil) {
+    http.Error(w, err.Error(), http.StatusBadRequest)
+    return
+  }
+
+  desk.MoveTo(pos)
+
+  res := PositionResultType{Position: desk.GetPosition()}
+
+  js, err2 := json.Marshal(res)
+
+  if (err2 != nil) {
+    http.Error(w, err2.Error(), http.StatusInternalServerError)
+  }
+
+  w.Header().Set("Content-Type", "application/json")
+  w.Write(js)
+
+}
+
+func primeHandler(w http.ResponseWriter, r *http.Request) {
+  desk.Prime()
+
+  result := PositionResultType{Position: desk.GetPosition()}
+  js, err := json.Marshal(result)
+
+  if (err != nil) {
+    http.Error(w, err.Error(), http.StatusInternalServerError)
+  } else {
+    w.Header().Set("Content-Type", "application/json")
+    w.Write(js)
+  }
+}
+
+func positionHandler(w http.ResponseWriter, r *http.Request) {
+  var res PositionResultType
+
+  res.Position = desk.GetPosition()
+
+  js, err := json.Marshal(res)
+
+  if (err != nil) {
+    http.Error(w, err.Error(), http.StatusInternalServerError)
+  }
+
+  w.Header().Set("Content-Type", "application/json")
+  w.Write(js)
+}
+
+func stopHandler(w http.ResponseWriter, r *http.Request) {
+  desk.Stop()
+
+  res := PositionResultType{Position: desk.GetPosition()}
+
+  js, err := json.Marshal(res)
+
+  if (err != nil) {
+    http.Error(w, err.Error(), http.StatusInternalServerError)
+  }
+
+  w.Header().Set("Content-Type", "application/json")
+  w.Write(js)
+}
+
 func distanceHandler(w http.ResponseWriter, r *http.Request) {
-  var d DistanceResultType
+  fmt.Println("GET /distance")
+  res := DistanceResultType{Distance: distance.ReadDistance()}
 
-  d.Distance = distance.ReadAverageDistance(10)
+  js, err := json.Marshal(res)
 
-  js, err := json.Marshal(d)
+  if (err != nil) {
+    http.Error(w, err.Error(), http.StatusInternalServerError)
+  }
+
+  fmt.Printf("measured distance: %.2f\n", res.Distance)
+
+  w.Header().Set("Content-Type", "application/json")
+  w.Write(js)
+}
+
+func statusHandler(w http.ResponseWriter, r *http.Request) {
+  res := StatusResultType{IsPrimed: desk.IsPrimed()}
+
+  js, err := json.Marshal(res)
 
   if (err != nil) {
     http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -69,15 +193,32 @@ func main() {
   settings = readConfig("settings.json")
 
   // initialize distance module
-  err := distance.Init(settings.Sensor.EchoPin, settings.Sensor.TriggerPin)
+  err := desk.Init(settings.Desk.UpPin, settings.Desk.DownPin)
 
   if (err != nil) {
     fmt.Printf("%v\n", err);
     os.Exit(1)
   }
 
+  err = distance.Init(settings.Sensor.EchoPin, settings.Sensor.TriggerPin)
+
+  if (err != nil) {
+    fmt.Printf("%v\n", err);
+    os.Exit(1)
+  }
+
+  rtr := mux.NewRouter()
+
   fmt.Printf("Listening on %s:%d\n", settings.Host.HostName, settings.Host.Port)
 
-  http.HandleFunc("/distance", distanceHandler)
+  rtr.HandleFunc("/position", positionHandler).Methods("GET")
+  rtr.HandleFunc("/distance", distanceHandler).Methods("GET")
+  rtr.HandleFunc("/status", statusHandler).Methods("GET")
+  rtr.HandleFunc("/move/{direction:(up|down)}", moveHandler).Methods("POST")
+  rtr.HandleFunc("/go/{position:[0-9.]+}", goHandler).Methods("POST")
+  rtr.HandleFunc("/prime", primeHandler).Methods("POST")
+  rtr.HandleFunc("/stop", stopHandler).Methods("POST")
+  http.Handle("/", rtr)
+
   http.ListenAndServe(fmt.Sprintf("%s:%d", settings.Host.HostName, settings.Host.Port), nil)
 }

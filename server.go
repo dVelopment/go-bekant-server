@@ -10,9 +10,14 @@ import (
   "github.com/dvelopment/go-pi-distance"
   "github.com/gorilla/mux"
   "strconv"
+  "time"
+  "math"
 )
 
-var settings ConfigType
+var (
+  settings ConfigType
+  interrupt, moving bool
+)
 
 type ConfigType struct {
   Host HostConfigType
@@ -91,19 +96,90 @@ func moveHandler(w http.ResponseWriter, r *http.Request) {
   }
 }
 
+func GoUpTo(target float64) {
+  interrupt = false
+  desk.Move(desk.Up)
+  moving = true
+
+  dist := distance.ReadDistance()
+  fmt.Printf("GoUpTo: %.2fcm - %.2fcm\n", dist, target)
+
+  for (!interrupt && dist < target) {
+    dist = distance.ReadDistance()
+    fmt.Printf("GoUpTo: %.2fcm - %.2fcm\n", dist, target)
+    time.Sleep(50 * time.Millisecond)
+  }
+  desk.Stop()
+  moving = false
+
+  // check accuracy
+  if (dist - target > 0.5) {
+    time.Sleep(400 * time.Millisecond)
+    GoDownTo(target)
+  }
+}
+
+func GoDownTo(target float64) {
+  interrupt = false
+  desk.Move(desk.Down)
+  moving = true
+  dist := distance.ReadDistance()
+  fmt.Printf("GoDownTo: %.2fcm - %.2fcm\n", dist, target)
+
+  for (!interrupt && (dist == -1 || dist > target)) {
+    dist = distance.ReadDistance()
+    fmt.Printf("GoDownTo: %.2fcm - %.2fcm\n", dist, target)
+    time.Sleep(50 * time.Millisecond)
+  }
+  desk.Stop()
+  moving = false
+
+  // check accuracy
+  if (target - dist > 0.5) {
+    time.Sleep(400 * time.Millisecond)
+    GoUpTo(target)
+  }
+}
+
+
 func goHandler(w http.ResponseWriter, r *http.Request) {
   params := mux.Vars(r)
 
-  pos, err := strconv.ParseFloat(params["position"], 64)
+  target, err := strconv.ParseFloat(params["position"], 64)
 
   if (err != nil) {
     http.Error(w, err.Error(), http.StatusBadRequest)
     return
   }
 
-  desk.MoveTo(pos)
+  // currently moving to a target?
+  if (moving) {
+    // stop it
+    interrupt = true
+    // make sure it's being registered
+    time.Sleep(500 * time.Millisecond)
+  }
 
-  res := PositionResultType{Position: desk.GetPosition()}
+  // get current position
+  position := distance.ReadDistance()
+
+  for (position == -1) {
+    position = distance.ReadDistance()
+  }
+
+  delta := target - position
+
+  fmt.Printf("delta: %.2fcm\ntarget: %.2fcm\n", delta, target)
+
+  if (math.Abs(delta) > 0.5) {
+    if (delta > 0) {
+      GoUpTo(target)
+    } else {
+      GoDownTo(target)
+    }
+  }
+
+  res := PositionResultType{Position: distance.ReadDistance()}
 
   js, err2 := json.Marshal(res)
 
@@ -119,7 +195,7 @@ func goHandler(w http.ResponseWriter, r *http.Request) {
 func primeHandler(w http.ResponseWriter, r *http.Request) {
   desk.Prime()
 
-  result := PositionResultType{Position: desk.GetPosition()}
+  result := PositionResultType{Position: distance.ReadDistance()}
   js, err := json.Marshal(result)
 
   if (err != nil) {
@@ -133,7 +209,7 @@ func primeHandler(w http.ResponseWriter, r *http.Request) {
 func positionHandler(w http.ResponseWriter, r *http.Request) {
   var res PositionResultType
 
-  res.Position = desk.GetPosition()
+  res.Position = distance.ReadDistance()
 
   js, err := json.Marshal(res)
 
@@ -148,7 +224,7 @@ func positionHandler(w http.ResponseWriter, r *http.Request) {
 func stopHandler(w http.ResponseWriter, r *http.Request) {
   desk.Stop()
 
-  res := PositionResultType{Position: desk.GetPosition()}
+  res := PositionResultType{Position: distance.ReadDistance()}
 
   js, err := json.Marshal(res)
 

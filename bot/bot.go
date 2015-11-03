@@ -34,8 +34,10 @@ var (
 
   upState, downState, leftState, rightState rpio.State
 
-  moving chan<- desk.Direction
+  moving, preferences chan<- desk.Direction
   stopped chan<- bool
+
+  interrupt, isMoving bool
 )
 
 type ButtonState uint8
@@ -45,9 +47,73 @@ const (
   Off
 )
 
-const DISTANCE_READS = 11
+const DISTANCE_READS = 5
+
+func IsMoving() (bool) {
+  return isMoving
+}
+
+func Interrupt() {
+  interrupt = true
+
+  // make sure it's being registered
+  time.Sleep(500 * time.Millisecond)
+}
+
+func GoUpTo(target float64) {
+  interrupt = false
+  Move(desk.Up)
+  isMoving = true
+
+  dist := ReadDistance()
+  fmt.Printf("GoUpTo: %.2fcm - %.2fcm\n", dist, target)
+
+  for (!interrupt && dist < target) {
+    dist = ReadDistance()
+    fmt.Printf("GoUpTo: %.2fcm - %.2fcm\n", dist, target)
+    time.Sleep(50 * time.Millisecond)
+  }
+  Stop()
+  isMoving = false
+
+  // check accuracy
+  if (dist - target > 0.5) {
+    time.Sleep(500 * time.Millisecond)
+    GoDownTo(target)
+  }
+}
+
+func GoDownTo(target float64) {
+  interrupt = false
+  Move(desk.Down)
+  isMoving = true
+  dist := ReadDistance()
+  fmt.Printf("GoDownTo: %.2fcm - %.2fcm\n", dist, target)
+
+  for (!interrupt && (dist == -1 || dist > target)) {
+    dist = ReadDistance()
+    fmt.Printf("GoDownTo: %.2fcm - %.2fcm\n", dist, target)
+    time.Sleep(50 * time.Millisecond)
+  }
+  Stop()
+  isMoving = false
+
+  // check accuracy
+  if (target - dist > 0.5) {
+    time.Sleep(500 * time.Millisecond)
+    GoUpTo(target)
+  }
+}
 
 func Move(dir desk.Direction) {
+  // currently moving to a target?
+  if (isMoving) {
+    // stop it
+    interrupt = true
+    // make sure it's being registered
+    time.Sleep(500 * time.Millisecond)
+  }
+
   desk.Move(dir)
 }
 
@@ -119,24 +185,34 @@ func Run() {
 
     tmpState = leftButton.Read()
     if (leftState != tmpState) {
-      ButtonChanged("left", tmpState)
+      state = ButtonChanged("left", tmpState)
       leftState = tmpState
+
+      if (state == On) {
+        preferences <- desk.Down
+      }
     }
 
     tmpState = rightButton.Read()
     if (rightState != tmpState) {
-      ButtonChanged("right", tmpState)
+      state = ButtonChanged("right", tmpState)
       rightState = tmpState
+
+      if (state == On) {
+        preferences <- desk.Up
+      }
     }
 
     time.Sleep(10 * time.Millisecond)
   }
 }
 
-func Init(joystickConfig JoystickConfigType, deskConfig DeskConfigType, m chan<- desk.Direction, s chan<- bool) {
+func Init(joystickConfig JoystickConfigType, deskConfig DeskConfigType, sensorConfig SensorConfigType, m chan<- desk.Direction, s chan<- bool, p chan<- desk.Direction) {
   desk.Init(deskConfig.UpPin, deskConfig.DownPin)
+  distance.Init(sensorConfig.EchoPin, sensorConfig.TriggerPin)
   moving = m
   stopped = s
+  preferences = p
 
   upState = rpio.High
   downState = rpio.High

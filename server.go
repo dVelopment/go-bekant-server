@@ -17,7 +17,6 @@ import (
 
 var (
   settings ConfigType
-  interrupt, moving bool
 )
 
 type ConfigType struct {
@@ -25,6 +24,13 @@ type ConfigType struct {
   Sensor bot.SensorConfigType
   Desk bot.DeskConfigType
   Joystick bot.JoystickConfigType
+  WebApp WebAppConfigType
+}
+
+type WebAppConfigType struct {
+  HostName string
+  Port int
+  Secret string
 }
 
 type HostConfigType struct {
@@ -74,14 +80,6 @@ func moveHandler(w http.ResponseWriter, r *http.Request) {
     direction = desk.Down
   }
 
-  // currently moving to a target?
-  if (moving) {
-    // stop it
-    interrupt = true
-    // make sure it's being registered
-    time.Sleep(500 * time.Millisecond)
-  }
-
   bot.Move(direction)
 
   result := MoveResultType{Direction: dir}
@@ -93,51 +91,6 @@ func moveHandler(w http.ResponseWriter, r *http.Request) {
   } else {
     w.Header().Set("Content-Type", "application/json")
     w.Write(js)
-  }
-}
-
-func GoUpTo(target float64) {
-  interrupt = false
-  bot.Move(desk.Up)
-  moving = true
-
-  dist := bot.ReadDistance()
-  fmt.Printf("GoUpTo: %.2fcm - %.2fcm\n", dist, target)
-
-  for (!interrupt && dist < target) {
-    dist = bot.ReadDistance()
-    fmt.Printf("GoUpTo: %.2fcm - %.2fcm\n", dist, target)
-    time.Sleep(50 * time.Millisecond)
-  }
-  bot.Stop()
-  moving = false
-
-  // check accuracy
-  if (dist - target > 0.5) {
-    time.Sleep(400 * time.Millisecond)
-    GoDownTo(target)
-  }
-}
-
-func GoDownTo(target float64) {
-  interrupt = false
-  bot.Move(desk.Down)
-  moving = true
-  dist := bot.ReadDistance()
-  fmt.Printf("GoDownTo: %.2fcm - %.2fcm\n", dist, target)
-
-  for (!interrupt && (dist == -1 || dist > target)) {
-    dist = bot.ReadDistance()
-    fmt.Printf("GoDownTo: %.2fcm - %.2fcm\n", dist, target)
-    time.Sleep(50 * time.Millisecond)
-  }
-  bot.Stop()
-  moving = false
-
-  // check accuracy
-  if (target - dist > 0.5) {
-    time.Sleep(400 * time.Millisecond)
-    GoUpTo(target)
   }
 }
 
@@ -153,11 +106,9 @@ func goHandler(w http.ResponseWriter, r *http.Request) {
   }
 
   // currently moving to a target?
-  if (moving) {
+  if (bot.IsMoving()) {
     // stop it
-    interrupt = true
-    // make sure it's being registered
-    time.Sleep(500 * time.Millisecond)
+    bot.Interrupt()
   }
 
   // get current position
@@ -173,9 +124,9 @@ func goHandler(w http.ResponseWriter, r *http.Request) {
 
   if (math.Abs(delta) > 0.5) {
     if (delta > 0) {
-      GoUpTo(target)
+      bot.GoUpTo(target)
     } else {
-      GoDownTo(target)
+      bot.GoDownTo(target)
     }
   }
 
@@ -221,11 +172,9 @@ func positionHandler(w http.ResponseWriter, r *http.Request) {
 
 func stopHandler(w http.ResponseWriter, r *http.Request) {
   // currently moving to a target?
-  if (moving) {
+  if (bot.IsMoving()) {
     // stop it
-    interrupt = true
-    // make sure it's being registered
-    time.Sleep(500 * time.Millisecond)
+    bot.Interrupt()
   }
 
   bot.Stop()
@@ -271,6 +220,21 @@ func statusHandler(w http.ResponseWriter, r *http.Request) {
   w.Write(js)
 }
 
+func notifyWebApp(path string, config WebAppConfigType) {
+  client := &http.Client{}
+  url := fmt.Sprintf("http://%s:%d/desk/%s", config.HostName, config.Port, path)
+  req, err := http.NewRequest("POST", url, nil)
+  req.Header.Set("Authorization", config.Secret)
+
+  res, err := client.Do(req)
+
+  if err != nil {
+    fmt.Printf("[Server] Error notifying web app: %v\n", err)
+  } else {
+    res.Body.Close()
+  }
+}
+
 func main() {
   settingsPtr := flag.String("settings", "settings.json", "Path to the settings file")
   flag.Parse()
@@ -291,8 +255,9 @@ func main() {
 
   moving := make(chan desk.Direction, 1)
   stopped := make(chan bool, 1)
+  preferences := make(chan desk.Direction, 1)
 
-  bot.Init(settings.Joystick, settings.Desk, moving, stopped)
+  bot.Init(settings.Joystick, settings.Desk, settings.Sensor, moving, stopped, preferences)
   go bot.Run()
 
   go http.ListenAndServe(fmt.Sprintf("%s:%d", settings.Host.HostName, settings.Host.Port), nil)
@@ -303,8 +268,27 @@ func main() {
     select {
     case dir := <-moving:
       fmt.Printf("[Server] desk moving: %v\n", dir)
+      var direction string
+      if dir == desk.Up {
+        direction = "up"
+      } else {
+        direction = "down"
+      }
+
+      notifyWebApp(fmt.Sprintf("moving/%s", direction), settings.WebApp)
+    case dir := <-preferences:
+      fmt.Printf("[Server] desk next preference: %v\n", dir)
+      var direction string
+      if dir == desk.Up {
+        direction = "up"
+      } else {
+        direction = "down"
+      }
+
+      notifyWebApp(fmt.Sprintf("preferences/%s", direction), settings.WebApp)
     case <-stopped:
       fmt.Println("[Server] desk stopped")
+      notifyWebApp("stopped", settings.WebApp)
     }
   }
 }

@@ -7,7 +7,7 @@ import (
 )
 
 const SPEED_OF_SOUND = 34320.0 // in cm per second
-const READ_INTERVAL = 10 * time.Microsecond // pause between two readings
+const READ_INTERVAL = time.Millisecond // pause between two readings
 
 var (
   echoPin rpio.Pin
@@ -24,7 +24,7 @@ func SetMaxDistance(cm int) () {
 }
 
 func Pause() {
-  time.Sleep(READ_INTERVAL)
+  time.Sleep(timeout)
 }
 
 func ReadDistance() (float64) {
@@ -59,7 +59,11 @@ func ReadDistance() (float64) {
   for (res == rpio.High) {
     res = echoPin.Read()
     if (time.Now().After(echoTimeout)) {
-      fmt.Println("timeout while high")
+      fmt.Printf("timeout while high\nstart: %d:%d:%d.%d\ntimeout:  %d:%d:%d.%d\necho: %d\n\n",
+        start.Hour(), start.Minute(), start.Second(), start.Nanosecond(),
+        echoTimeout.Hour(), echoTimeout.Minute(), echoTimeout.Second(), echoTimeout.Nanosecond(),
+        echoPin.Read(),
+      )
       return -1
     }
   }

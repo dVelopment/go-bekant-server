@@ -6,12 +6,13 @@ import (
   "encoding/json"
   "io/ioutil"
   "os"
-  "github.com/dvelopment/go-bekant"
-  "github.com/dvelopment/go-pi-distance"
   "github.com/gorilla/mux"
   "strconv"
   "time"
   "math"
+  "github.com/dvelopment/go-bekant-server/bot"
+  "github.com/dvelopment/go-bekant-server/desk"
+  "flag"
 )
 
 var (
@@ -21,23 +22,14 @@ var (
 
 type ConfigType struct {
   Host HostConfigType
-  Sensor SensorConfigType
-  Desk DeskConfigType
+  Sensor bot.SensorConfigType
+  Desk bot.DeskConfigType
+  Joystick bot.JoystickConfigType
 }
 
 type HostConfigType struct {
   HostName string
   Port int
-}
-
-type SensorConfigType struct {
-  EchoPin int
-  TriggerPin int
-}
-
-type DeskConfigType struct {
-  UpPin int
-  DownPin int
 }
 
 type PositionResultType struct {
@@ -82,7 +74,15 @@ func moveHandler(w http.ResponseWriter, r *http.Request) {
     direction = desk.Down
   }
 
-  desk.Move(direction)
+  // currently moving to a target?
+  if (moving) {
+    // stop it
+    interrupt = true
+    // make sure it's being registered
+    time.Sleep(500 * time.Millisecond)
+  }
+
+  bot.Move(direction)
 
   result := MoveResultType{Direction: dir}
 
@@ -98,18 +98,18 @@ func moveHandler(w http.ResponseWriter, r *http.Request) {
 
 func GoUpTo(target float64) {
   interrupt = false
-  desk.Move(desk.Up)
+  bot.Move(desk.Up)
   moving = true
 
-  dist := distance.ReadDistance()
+  dist := bot.ReadDistance()
   fmt.Printf("GoUpTo: %.2fcm - %.2fcm\n", dist, target)
 
   for (!interrupt && dist < target) {
-    dist = distance.ReadDistance()
+    dist = bot.ReadDistance()
     fmt.Printf("GoUpTo: %.2fcm - %.2fcm\n", dist, target)
     time.Sleep(50 * time.Millisecond)
   }
-  desk.Stop()
+  bot.Stop()
   moving = false
 
   // check accuracy
@@ -121,17 +121,17 @@ func GoUpTo(target float64) {
 
 func GoDownTo(target float64) {
   interrupt = false
-  desk.Move(desk.Down)
+  bot.Move(desk.Down)
   moving = true
-  dist := distance.ReadDistance()
+  dist := bot.ReadDistance()
   fmt.Printf("GoDownTo: %.2fcm - %.2fcm\n", dist, target)
 
   for (!interrupt && (dist == -1 || dist > target)) {
-    dist = distance.ReadDistance()
+    dist = bot.ReadDistance()
     fmt.Printf("GoDownTo: %.2fcm - %.2fcm\n", dist, target)
     time.Sleep(50 * time.Millisecond)
   }
-  desk.Stop()
+  bot.Stop()
   moving = false
 
   // check accuracy
@@ -161,10 +161,10 @@ func goHandler(w http.ResponseWriter, r *http.Request) {
   }
 
   // get current position
-  position := distance.ReadDistance()
+  position := bot.ReadDistance()
 
   for (position == -1) {
-    position = distance.ReadDistance()
+    position = bot.ReadDistance()
   }
 
   delta := target - position
@@ -179,7 +179,7 @@ func goHandler(w http.ResponseWriter, r *http.Request) {
     }
   }
 
-  res := PositionResultType{Position: distance.ReadDistance()}
+  res := PositionResultType{Position: bot.ReadDistance()}
 
   js, err2 := json.Marshal(res)
 
@@ -193,9 +193,7 @@ func goHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func primeHandler(w http.ResponseWriter, r *http.Request) {
-  desk.Prime()
-
-  result := PositionResultType{Position: distance.ReadDistance()}
+  result := PositionResultType{Position: bot.ReadDistance()}
   js, err := json.Marshal(result)
 
   if (err != nil) {
@@ -209,7 +207,7 @@ func primeHandler(w http.ResponseWriter, r *http.Request) {
 func positionHandler(w http.ResponseWriter, r *http.Request) {
   var res PositionResultType
 
-  res.Position = distance.ReadDistance()
+  res.Position = bot.ReadDistance()
 
   js, err := json.Marshal(res)
 
@@ -222,9 +220,17 @@ func positionHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func stopHandler(w http.ResponseWriter, r *http.Request) {
-  desk.Stop()
+  // currently moving to a target?
+  if (moving) {
+    // stop it
+    interrupt = true
+    // make sure it's being registered
+    time.Sleep(500 * time.Millisecond)
+  }
 
-  res := PositionResultType{Position: distance.ReadDistance()}
+  bot.Stop()
+
+  res := PositionResultType{Position: bot.ReadDistance()}
 
   js, err := json.Marshal(res)
 
@@ -238,7 +244,7 @@ func stopHandler(w http.ResponseWriter, r *http.Request) {
 
 func distanceHandler(w http.ResponseWriter, r *http.Request) {
   fmt.Println("GET /distance")
-  res := DistanceResultType{Distance: distance.ReadDistance()}
+  res := DistanceResultType{Distance: bot.ReadDistance()}
 
   js, err := json.Marshal(res)
 
@@ -253,7 +259,7 @@ func distanceHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func statusHandler(w http.ResponseWriter, r *http.Request) {
-  res := StatusResultType{IsPrimed: desk.IsPrimed()}
+  res := StatusResultType{IsPrimed: true}
 
   js, err := json.Marshal(res)
 
@@ -266,22 +272,9 @@ func statusHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
-  settings = readConfig("settings.json")
-
-  // initialize distance module
-  err := desk.Init(settings.Desk.UpPin, settings.Desk.DownPin)
-
-  if (err != nil) {
-    fmt.Printf("%v\n", err);
-    os.Exit(1)
-  }
-
-  err = distance.Init(settings.Sensor.EchoPin, settings.Sensor.TriggerPin)
-
-  if (err != nil) {
-    fmt.Printf("%v\n", err);
-    os.Exit(1)
-  }
+  settingsPtr := flag.String("settings", "settings.json", "Path to the settings file")
+  flag.Parse()
+  settings = readConfig(*settingsPtr)
 
   rtr := mux.NewRouter()
 
@@ -296,5 +289,22 @@ func main() {
   rtr.HandleFunc("/stop", stopHandler).Methods("POST")
   http.Handle("/", rtr)
 
-  http.ListenAndServe(fmt.Sprintf("%s:%d", settings.Host.HostName, settings.Host.Port), nil)
+  moving := make(chan desk.Direction, 1)
+  stopped := make(chan bool, 1)
+
+  bot.Init(settings.Joystick, settings.Desk, moving, stopped)
+  go bot.Run()
+
+  go http.ListenAndServe(fmt.Sprintf("%s:%d", settings.Host.HostName, settings.Host.Port), nil)
+
+  time.Sleep(time.Millisecond)
+
+  for {
+    select {
+    case dir := <-moving:
+      fmt.Printf("[Server] desk moving: %v\n", dir)
+    case <-stopped:
+      fmt.Println("[Server] desk stopped")
+    }
+  }
 }

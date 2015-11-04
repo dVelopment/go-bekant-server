@@ -7,6 +7,8 @@ import (
   "github.com/stianeikeland/go-rpio"
   "time"
   "sort"
+  "sync"
+  "runtime"
 )
 
 type JoystickConfigType struct {
@@ -38,6 +40,8 @@ var (
   stopped chan<- bool
 
   interrupt, isMoving bool
+
+  distanceMutex, interruptMutex *sync.Mutex
 )
 
 type ButtonState uint8
@@ -47,17 +51,20 @@ const (
   Off
 )
 
-const DISTANCE_READS = 5
+const DISTANCE_READS = 7
 
 func IsMoving() (bool) {
   return isMoving
 }
 
 func Interrupt() {
+  interruptMutex.Lock()
   interrupt = true
 
   // make sure it's being registered
   time.Sleep(500 * time.Millisecond)
+  interruptMutex.Unlock()
+  runtime.Gosched()
 }
 
 func GoUpTo(target float64) {
@@ -78,7 +85,7 @@ func GoUpTo(target float64) {
 
   // check accuracy
   if (dist - target > 0.5) {
-    time.Sleep(500 * time.Millisecond)
+    time.Sleep(time.Second)
     GoDownTo(target)
   }
 }
@@ -100,7 +107,7 @@ func GoDownTo(target float64) {
 
   // check accuracy
   if (target - dist > 0.5) {
-    time.Sleep(500 * time.Millisecond)
+    time.Sleep(time.Second)
     GoUpTo(target)
   }
 }
@@ -109,15 +116,17 @@ func Move(dir desk.Direction) {
   // currently moving to a target?
   if (isMoving) {
     // stop it
-    interrupt = true
-    // make sure it's being registered
-    time.Sleep(500 * time.Millisecond)
+    Interrupt()
   }
 
   desk.Move(dir)
 }
 
 func Stop() {
+  if (isMoving) {
+    // stop it
+    Interrupt()
+  }
   desk.Stop()
 }
 
@@ -210,6 +219,10 @@ func Run() {
 func Init(joystickConfig JoystickConfigType, deskConfig DeskConfigType, sensorConfig SensorConfigType, m chan<- desk.Direction, s chan<- bool, p chan<- desk.Direction) {
   desk.Init(deskConfig.UpPin, deskConfig.DownPin)
   distance.Init(sensorConfig.EchoPin, sensorConfig.TriggerPin)
+
+  distanceMutex = &sync.Mutex{}
+  interruptMutex = &sync.Mutex{}
+
   moving = m
   stopped = s
   preferences = p

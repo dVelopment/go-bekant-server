@@ -4,16 +4,18 @@ import (
   "fmt"
   "time"
   "github.com/stianeikeland/go-rpio"
+  "sync"
+  "runtime"
 )
 
 const SPEED_OF_SOUND = 34320.0 // in cm per second
-const READ_INTERVAL = time.Millisecond // pause between two readings
 
 var (
   echoPin rpio.Pin
   triggerPin rpio.Pin
   // default max distance: 150cm
   timeout = 300 * time.Second / SPEED_OF_SOUND
+  mutex *sync.Mutex
 )
 
 /**
@@ -30,6 +32,8 @@ func Pause() {
 func ReadDistance() (float64) {
   var res rpio.State
   var start, echoTimeout time.Time
+
+  mutex.Lock()
 
   // make sure trigger is low
   triggerPin.Low()
@@ -69,12 +73,10 @@ func ReadDistance() (float64) {
   }
 
   duration := time.Since(start).Seconds()
-
-  // fmt.Printf("duration: %.10fs\n", duration);
-
   distance := SPEED_OF_SOUND / 2.0 * duration
 
-  // fmt.Printf("distance: %.2fcm\n", distance)
+  mutex.Unlock()
+  runtime.Gosched()
 
   if (distance < 0) {
     // something went wrong
@@ -104,8 +106,11 @@ func Init(echo int, trigger int) (err error) {
   // ensure that triggerPin is set to low
   triggerPin.Low()
 
+  mutex = &sync.Mutex{}
+
   fmt.Println("Waiting for sensor to settle")
   time.Sleep(2 * time.Second)
+
 
   return nil
 }

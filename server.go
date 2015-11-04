@@ -105,12 +105,6 @@ func goHandler(w http.ResponseWriter, r *http.Request) {
     return
   }
 
-  // currently moving to a target?
-  if (bot.IsMoving()) {
-    // stop it
-    bot.Interrupt()
-  }
-
   // get current position
   position := bot.ReadDistance()
 

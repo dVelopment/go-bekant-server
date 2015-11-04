@@ -78,13 +78,6 @@ func ReadDistance() (float64) {
   mutex.Unlock()
   runtime.Gosched()
 
-  if (distance < 0) {
-    // something went wrong
-    // try again
-    Pause()
-    return ReadDistance()
-  }
-
   return distance
 }
 

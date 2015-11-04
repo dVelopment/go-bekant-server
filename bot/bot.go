@@ -68,6 +68,9 @@ func Interrupt() {
 }
 
 func GoUpTo(target float64) {
+  if (isMoving) {
+    Interrupt()
+  }
   interrupt = false
   Move(desk.Up)
   isMoving = true
@@ -84,13 +87,16 @@ func GoUpTo(target float64) {
   isMoving = false
 
   // check accuracy
-  if (dist - target > 0.5) {
-    time.Sleep(time.Second)
+  if (!interrupt && (dist - target > 0.5)) {
+    time.Sleep(500 * time.Millisecond)
     GoDownTo(target)
   }
 }
 
 func GoDownTo(target float64) {
+  if (isMoving) {
+    Interrupt()
+  }
   interrupt = false
   Move(desk.Down)
   isMoving = true
@@ -106,8 +112,8 @@ func GoDownTo(target float64) {
   isMoving = false
 
   // check accuracy
-  if (target - dist > 0.5) {
-    time.Sleep(time.Second)
+  if (!interrupt && (target - dist > 0.5)) {
+    time.Sleep(500 * time.Millisecond)
     GoUpTo(target)
   }
 }
@@ -123,11 +129,8 @@ func Move(dir desk.Direction) {
 }
 
 func Stop() {
-  if (isMoving) {
-    // stop it
-    Interrupt()
-  }
   desk.Stop()
+  Interrupt()
 }
 
 func Close() {

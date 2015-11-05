@@ -51,7 +51,7 @@ const (
   Off
 )
 
-const DISTANCE_READS = 7
+const DISTANCE_READS = 1
 
 func IsMoving() (bool) {
   return isMoving
@@ -60,6 +60,7 @@ func IsMoving() (bool) {
 func Interrupt() {
   interruptMutex.Lock()
   interrupt = true
+  desk.Stop()
 
   // make sure it's being registered
   time.Sleep(500 * time.Millisecond)
@@ -69,7 +70,7 @@ func Interrupt() {
 
 func GoUpTo(target float64) {
   if (isMoving) {
-    Interrupt()
+    Stop()
   }
   interrupt = false
   Move(desk.Up)
@@ -95,7 +96,7 @@ func GoUpTo(target float64) {
 
 func GoDownTo(target float64) {
   if (isMoving) {
-    Interrupt()
+    Stop()
   }
   interrupt = false
   Move(desk.Down)
@@ -122,7 +123,7 @@ func Move(dir desk.Direction) {
   // currently moving to a target?
   if (isMoving) {
     // stop it
-    Interrupt()
+    Stop()
   }
 
   desk.Move(dir)
@@ -131,6 +132,7 @@ func Move(dir desk.Direction) {
 func Stop() {
   desk.Stop()
   Interrupt()
+  isMoving = false
 }
 
 func Close() {

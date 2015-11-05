@@ -13,8 +13,8 @@ const SPEED_OF_SOUND = 34320.0 // in cm per second
 var (
   echoPin rpio.Pin
   triggerPin rpio.Pin
-  // default max distance: 150cm
-  timeout = 300 * time.Second / SPEED_OF_SOUND
+
+  timeout = 300 * time.Second / SPEED_OF_SOUND // default max distance: 150cm
   mutex *sync.Mutex
 )
 
@@ -26,7 +26,7 @@ func SetMaxDistance(cm int) () {
 }
 
 func Pause() {
-  time.Sleep(timeout)
+  time.Sleep(timeout * 2)
 }
 
 func ReadDistance() (float64) {
@@ -54,6 +54,8 @@ func ReadDistance() (float64) {
     start = time.Now()
     if (start.After(to)) {
       fmt.Println("timeout while waiting on echo")
+      mutex.Unlock()
+      runtime.Gosched()
       return -1
     }
   }
@@ -68,6 +70,8 @@ func ReadDistance() (float64) {
         echoTimeout.Hour(), echoTimeout.Minute(), echoTimeout.Second(), echoTimeout.Nanosecond(),
         echoPin.Read(),
       )
+      mutex.Unlock()
+      runtime.Gosched()
       return -1
     }
   }
